@@ -238,26 +238,73 @@ read-only agents that *propose* edits and apply them yourself in one pass. Only 
 genuinely edit the same tree at once, pay for `isolation: 'worktree'`. Merging worktrees,
 resolving conflicts and committing stay with you.
 
-**Both plugins are main-session only.** Slash commands do not exist inside a workflow agent or
-an `Agent` subagent — only here. That splits by shape:
+**Both plugins are main-session only.** Neither their slash commands nor their `subagent_type`s
+exist inside a workflow agent — only here. That splits by shape:
 
-- **One subagent** — drive the plugin. `/codex:review`, `/opencode:review` and friends track the
-  job, survive a long run, and give you `status` / `result` / `cancel`.
-- **Workflow** — the plugin is unreachable from inside the script. OpenCode still works there as
-  a raw CLI call (`opencode run … --auto`) from a Bash-capable agent. Codex has no equivalent
-  worth the trouble, so run the workflow on Claude agents and hand Codex the single review pass
-  afterwards, on the workflow's output. Say so in the one-line note, so the choice does not look
-  ignored.
+- **One subagent** — drive the plugin: `Agent` with `subagent_type: "codex:codex-rescue"` or
+  `"opencode:opencode-rescue"`, or `/codex:review`, `/opencode:review` and friends, which track
+  the job, survive a long run, and give you `status` / `result` / `cancel`.
+- **Workflow** — the plugin is unreachable from inside the script, by both routes. OpenCode still
+  works there as a raw CLI call (`opencode run … --auto`) from a Bash-capable agent; this is the
+  only place that call belongs. Codex has no equivalent worth the trouble, so run the workflow on
+  Claude agents and hand Codex the single review pass afterwards, on the workflow's output. Say
+  so in the one-line note, so the choice does not look ignored.
 
 ## Running the engines
 
-**Sonnet subagent.** `Agent` tool with `model: "sonnet"`. `Explore` for read-only search and
-grepping, `general-purpose` when it must also write or run commands. No setup, nothing to read.
+**Spawn through the `Agent` tool, not Bash.** Every subagent this skill launches is an `Agent`
+call naming a `subagent_type` — never a coding CLI shelled out through Bash. A Bash-launched CLI
+is not a tracked task: you cannot poll, stop, or get notified on it, it either blocks the turn or
+orphans itself past a tool timeout, and what comes back is raw stdout you have to parse instead
+of a structured result. Bash is for probes and for the one workflow case below.
 
-**OpenCode and Codex.** `references/engines.md` has the invocation for each — model resolution,
-the effort flags, `--auto`, the timeout you need to give a cold start, and which plugin slash
-commands track a long job. Read it before the first run of a session; do not reconstruct the
-flags from memory.
+| Engine | Launch |
+|---|---|
+| Sonnet | `Agent` with `model: "sonnet"` — `Explore` for read-only search and grepping, `general-purpose` when it must also write or run commands. No setup, nothing to read. |
+| OpenCode | `Agent` with `subagent_type: "opencode:opencode-rescue"`, or `/opencode:*` for a long job you want to track. |
+| Codex | `Agent` with `subagent_type: "codex:codex-rescue"`, or `/codex:*` for a long job you want to track. |
+
+The two plugin subagent types drive their own CLI inside their own context, so the flags and the
+session handling stay with them. Check the session's agent list for the exact type name before
+naming it — an installed plugin that has not been reloaded registers neither its agents nor its
+slash commands, and a guessed `subagent_type` fails the call.
+
+**The one exception is inside a workflow script**, where plugin slash commands and plugin
+subagent types are both unreachable: there a Bash-capable agent calls `opencode run … --auto`
+itself. Nowhere else.
+
+`references/engines.md` has the rest — model resolution, the effort flags, `--auto`, the timeout
+a cold start needs, and which slash commands track a long job. Read it before the first
+OpenCode or Codex run of a session; do not reconstruct the flags from memory.
+
+## Every subagent gets a handle
+
+Give each spawned agent a **short random handle** — one word, no job description in it: `otter`,
+`finch`, `mako`, `sable`, `wren`, `kite`, `perch`, `lynx`. Draw a fresh one per spawn and never
+reuse one inside a session, including for a retry: a second `otter` makes every earlier line
+about `otter` ambiguous.
+
+| Where | How |
+|---|---|
+| `Agent` tool | `description: "otter"` |
+| Workflow `agent()` | `label: 'otter'` |
+| Addressing it later | `SendMessage({to: "otter", …})`, `ListAgents` to confirm it is still live |
+
+A handle stays unique when two agents are doing the identical job on different slices, which is
+exactly when a descriptive label collides and you can no longer tell which one to re-run or
+stop. It is also short enough to say in a report line without crowding out the finding.
+
+**The handle carries no meaning, so you carry it.** Nothing in `otter` says what otter was for.
+Post the map in your own text the moment you spawn — one line per agent, handle then job:
+
+> `otter` — review the auth diff · `finch` — sweep docs for stale flags
+
+Do that at spawn time, not at the end. The transcript is the only place that mapping lives, and
+a reader scrolling back to a bare `finch` with no key has to open the tool call to recover it.
+Reuse the same handles when you report, so the two halves line up.
+
+Do not put the handle inside the delegation prompt. The agent has no use for its own name, and a
+name in the prompt invites it to sign findings or refer to itself in the third person.
 
 ## After it runs
 
@@ -290,4 +337,6 @@ answer follow-ups from it. Re-delegating to recover evidence you chose not to ke
 expensive mistake available here.
 
 Then report what was found or changed, not how the delegation went — one line on where it ran
-and on what model.
+and on what model. Where more than one agent ran, attribute each finding to the handle that
+produced it, so a follow-up question lands on a specific agent's evidence rather than on the
+merged pile.

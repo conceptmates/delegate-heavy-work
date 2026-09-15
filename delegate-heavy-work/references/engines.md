@@ -85,6 +85,23 @@ carry on — do not loop.
 
 ## Running the engines
 
+**Spawn through the `Agent` tool.** Both plugins register a subagent type, and that is how a
+delegated run starts — not a CLI shelled out through Bash, which is untracked, unstoppable, and
+hands you stdout to parse.
+
+| Engine | Launch |
+|---|---|
+| OpenCode | `Agent` with `subagent_type: "opencode:opencode-rescue"`, or `/opencode:*` |
+| Codex | `Agent` with `subagent_type: "codex:codex-rescue"`, or `/codex:*` |
+| Sonnet | `Agent` with `model: "sonnet"` |
+
+Read the exact type name off the session's agent list before you call it. A plugin installed but
+not reloaded has registered nothing, and a guessed `subagent_type` fails the call outright.
+
+The run-time flags below stay inside the plugin subagent, which builds the command itself. You
+need them in two cases: a workflow agent calling `opencode run` directly — the one sanctioned
+Bash invocation — and diagnosing a plugin run that came back wrong.
+
 **OpenCode.** Resolve the model at run time — `opencode models` (optionally filtered by
 provider). Hardcoded IDs go stale and fail at the worst moment. Pick cheapest-capable for
 research, grepping, QA loops and bulk work; mid-tier for codegen from a spec; strongest for
@@ -124,4 +141,5 @@ loops the two agents against each other at stop time and drains usage limits for
 over one review pass.
 
 **Sonnet subagent.** `Agent` tool with `model: "sonnet"`. `Explore` for read-only search and
-grepping, `general-purpose` when it must also write or run commands.
+grepping, `general-purpose` when it must also write or run commands. Nothing to install and no
+CLI underneath it, so there is no preflight for this one.
