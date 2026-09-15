@@ -113,17 +113,29 @@ workflow, verification is adversarial by default.
 ## Decision 2: engine — ask once, then it sticks
 
 Ask on the **first** delegable task of a session, using `AskUserQuestion`. Name the actual task
-so the choice is concrete, and label each option *installed* or *needs one-time setup* from the
-preflight:
+so the choice is concrete, and label each option from what the preflight actually found:
 
-- **OpenCode subagent** — any provider; cheap models for volume work.
-- **Codex subagent** — OpenAI's plugin; strongest as a second opinion on review.
+- **OpenCode subagent** — free models, no login; cheap volume work.
+- **Codex subagent** — OpenAI's plugin; strongest as a second opinion on review. Needs a login.
 - **Sonnet subagent** — native, no setup, results return straight into this session.
 - **Stay on the current model** — the override, when accuracy beats cost.
 
-After that, reuse it silently for the session and state in one line where the work went. The
-**engine** sticks; the **tier** never does — research still gets a cheap model, review still
-gets a strong one, inside whichever engine was chosen.
+**If they pick OpenCode or Codex, ask two more in the same call** — model, and effort on a 1–5
+scale. Three questions, one interruption. Populate the model options from live output
+(`opencode models`, or the Codex plugin's own model list), never from memory.
+
+| effort | | OpenCode `--variant` | Codex `model_reasoning_effort` | workflow `effort` |
+|---|---|---|---|---|
+| 1 | skim | `minimal` | `minimal` | `low` |
+| 2 | light | `low` | `low` | `low` |
+| 3 | default | `medium` | `medium` | `medium` |
+| 4 | deep | `high` | `high` | `high` |
+| 5 | max | `max` | `xhigh` | `xhigh` |
+
+After that, reuse all three silently for the session and state in one line where the work went.
+The **engine** sticks outright. The model and effort answers are a **ceiling and a default**,
+not a pin: drop below them for a grep, never go above them without asking. Research still gets
+the cheap end, review still gets the strong end, inside whatever ceiling was set.
 
 Keep the choice recoverable: naming the engine in that one-line report ("ran on OpenCode, as
 before") means it survives in the transcript rather than only in the question that set it,
@@ -142,53 +154,82 @@ which is a second reason the native subagent is the right unattended default.
 
 ## Preflight
 
-Run before asking, so the options offered are real. Presence on PATH is not readiness — an
-unconfigured engine passes `which` and then fails inside the delegated run, after you have
-written the prompt:
+Preflight **installs**; it does not file a report about what is missing. Offering an engine as
+"needs setup" and moving on is how a session ends up on the fallback forever.
+
+Two things have to be true before an engine is real: the **plugin** is installed in Claude Code,
+and the plugin says the **CLI** under it is ready. Detect the first, then let the plugin answer
+the second.
 
 ```bash
-command -v opencode >/dev/null && opencode auth list 2>/dev/null
-command -v codex    >/dev/null && codex --version 2>/dev/null
 grep -Eil 'opencode|codex' ~/.claude/plugins/installed_plugins.json \
      ~/.claude/plugins/known_marketplaces.json 2>/dev/null
+command -v opencode >/dev/null && echo "opencode CLI present"
+command -v codex    >/dev/null && timeout 10 codex --version 2>/dev/null
 ```
 
-Treat "binary present, not logged in / no provider" as *needs setup*. Absence of those files is
-not proof of absence — if detection is ambiguous, offer the engine as *unverified* rather than
-missing. `/codex:setup` is the authoritative Codex health check.
+Sub-second. It tells you what to install, and nothing about readiness. Absence of those JSON
+files is not proof of absence — if detection is ambiguous, offer the engine as *unverified*
+rather than missing.
 
-If the user picks something uninstalled, install it — do not silently substitute another engine.
+### Install the missing plugin
 
-**Codex** (ChatGPT account, free tier included, or an `OPENAI_API_KEY`; runs count against your
-Codex usage limits):
+Codex — marketplace `openai-codex`, plugin `codex`:
 
-```bash
-npm i -g @openai/codex    # the plugin drives the local CLI
-codex login
-```
 ```
 /plugin marketplace add openai/codex-plugin-cc
 /plugin install codex@openai-codex
 /reload-plugins
-/codex:setup
 ```
 
-**OpenCode** (provider-agnostic):
+OpenCode — marketplace `tasict-opencode-plugin-cc`, plugin `opencode`:
 
-```bash
-npm i -g opencode-ai     # or: brew install opencode
-opencode auth login      # interactive; configures at least one provider
-```
 ```
 ! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash
 /reload-plugins
-/opencode:setup
 ```
 
-That last line pipes a remote script into a shell — show it and let the user approve rather than
-running it unannounced. `tasict/opencode-plugin-cc` is upstream; several identical-looking forks
-exist, so do not substitute a fork URL without the user deliberately confirming it. Both plugins
-need Node 18.18+. If an install fails, say what broke and fall back to Sonnet; do not loop.
+That curl pipes a remote script into a shell — show it and let the user approve rather than
+running it unannounced. `tasict/opencode-plugin-cc` is upstream; identical-looking forks exist,
+so do not substitute a fork URL without the user deliberately confirming it. A plugin is not
+loaded until `/reload-plugins`, so do not verify it in the same breath as installing it.
+
+### Readiness is the plugin's own answer
+
+Do not hand-roll the CLI check. Each plugin ships one, it returns in 2–3s, and it installs the
+CLI itself — via its own single `AskUserQuestion` then `npm i -g` — when the binary is absent.
+That is why this skill carries no CLI install commands of its own.
+
+```
+/codex:setup      →  {"ready": true,      "codex": {…}, "auth": {"loggedIn": true, …}}
+/opencode:setup   →  {"installed": true,  "version": "…", "providers": [], "reviewGate": false}
+```
+
+Branch on `ready` for Codex, `installed` for OpenCode.
+
+**`codex --version` is not the readiness check.** Codex availability is two probes, not one —
+`codex --version` *and* `codex app-server --help`. A machine passes the first, fails the second,
+and then every plugin command throws *"missing required runtime support"*. Use `--version` only
+as the free gate for whether anything is installed at all.
+
+**Codex auth cannot be shelled.** There is no `codex login status`. The plugin opens an
+app-server client and reads the account back over the protocol, so `/codex:setup`'s
+`auth.loggedIn` is the only authoritative answer. Codex wants a ChatGPT account (free tier
+included) or an `OPENAI_API_KEY`, and runs count against your Codex usage limits.
+
+**OpenCode needs no login at all.** `providers: []` is cosmetic — the plugin prints it and never
+gates on it. The CLI ships free models on the Zen endpoint that run at zero credentials, so for
+OpenCode, on PATH *is* ready. `opencode auth login` is optional and only buys paid Zen models or
+your own provider keys. Never block on it, and never run it unattended — it is interactive and
+will hang the shell until something kills it.
+
+**Neither plugin has a timeout.** Both wrap a bare `spawnSync` with no timeout option, and both
+can hang on a server that never answers. Bound them from your side. A probe that hits the bound
+is *unverified*, never *missing* — offer the engine, labelled. Do not retry: you have already
+spent the budget proving it is slow.
+
+Both plugins need Node 18.18+. If an install fails, say what broke, fall back to Sonnet, and
+carry on — do not loop.
 
 ## Writing the delegation prompt
 
@@ -255,10 +296,16 @@ read-only agents that *propose* edits and apply them yourself in one pass. Only 
 genuinely edit the same tree at once, pay for `isolation: 'worktree'`. Merging worktrees,
 resolving conflicts and committing stay with you.
 
-**Codex is a one-subagent engine only.** Its entry points are slash commands in the main
-session; workflow agents cannot run them. If the sticky engine is Codex and the shape is a
-workflow, run the workflow on Claude agents and hand Codex the single review pass afterwards,
-on the workflow's output. Say so in the one-line note, so the choice does not look ignored.
+**Both plugins are main-session only.** Slash commands do not exist inside a workflow agent or
+an `Agent` subagent — only here. That splits by shape:
+
+- **One subagent** — drive the plugin. `/codex:review`, `/opencode:review` and friends track the
+  job, survive a long run, and give you `status` / `result` / `cancel`.
+- **Workflow** — the plugin is unreachable from inside the script. OpenCode still works there as
+  a raw CLI call (`opencode run … --auto`) from a Bash-capable agent. Codex has no equivalent
+  worth the trouble, so run the workflow on Claude agents and hand Codex the single review pass
+  afterwards, on the workflow's output. Say so in the one-line note, so the choice does not look
+  ignored.
 
 ## Running the engines
 
@@ -269,13 +316,26 @@ review — and for review prefer a different provider family than the session's 
 same family shares the same blind spots.
 
 ```bash
-opencode run -m <provider/model> --auto "<the prompt>"
+opencode run -m <provider/model> --variant <effort> --auto "<the prompt>"
 ```
 
 `--auto` auto-approves non-denied permissions and is what makes an unattended run work — omitting
-it is what hangs one. Other flags: `--agent`, `-f` to attach files, `--dir`, `-c`/`-s` to
-continue a session. `--format json` emits raw JSON *events*, not a single answer — extract the
-final assistant message, or omit it for formatted text. Redirect long runs to a file.
+it is what hangs one. `--variant` is the reasoning-effort dial from the table above. Other flags:
+`--agent`, `-f` to attach files, `--dir`, `-c`/`-s` to continue a session. `--format json` emits
+raw JSON *events*, not a single answer — extract the final assistant message, or omit it for
+formatted text. Redirect long runs to a file.
+
+**Give it room.** A cold `opencode run` costs tens of seconds before the model says anything, and
+a real sweep runs minutes. A default two-minute tool timeout kills it mid-run and you pay for the
+tokens anyway. Background it, or set the bound explicitly.
+
+The free tier is the default choice for volume work — free models carry a `-free` suffix and need
+no credentials. Never hardcode one; the lineup rotates:
+
+```bash
+opencode models | grep -- '-free'
+```
+
 Slash commands: `/opencode:review`, `/opencode:adversarial-review`, `/opencode:rescue`,
 collected with `/opencode:status` and `/opencode:result`, stopped with `/opencode:cancel`.
 
@@ -283,8 +343,9 @@ collected with `/opencode:status` and `/opencode:result`, stopped with `/opencod
 just line-level bugs), `/codex:rescue`, `/codex:transfer`, with `/codex:status`,
 `/codex:result`, `/codex:cancel`. Reviews are slow — background them.
 
-Leave both plugins' **review gate** off: it loops the two agents against each other and drains
-usage limits for little gain over one review pass.
+Both plugins ship their **review gate** off (`reviewGateEnabled: false`). Leave it there — it
+loops the two agents against each other at stop time and drains usage limits for little gain
+over one review pass.
 
 **Sonnet subagent.** `Agent` tool with `model: "sonnet"`. `Explore` for read-only search and
 grepping, `general-purpose` when it must also write or run commands.
