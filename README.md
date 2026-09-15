@@ -43,8 +43,8 @@ Other agents read from different paths — `.cursor/rules`, `.opencode/skill`,
   silently. Includes the preflight that checks an engine is configured, not just on PATH.
 - **The delegation prompt** — what to withhold, what to always send, the anchor requirement, the
   size bound, the bounded write mandate.
-- **Handles** — every spawned agent gets a short random one-word name, posted as a handle→job
-  map at spawn time and reused when the findings come back.
+- **Task names** — every spawned agent is named after its job and the model it runs on
+  (`review-auth-diff [sonnet]`), with the slice in the name when two agents share a job.
 - **Model tier inside a workflow** — cheap tier for sweeps, strongest for verification, never
   the reverse.
 - **Verification after it runs** — why in-workflow verification does not discharge yours.

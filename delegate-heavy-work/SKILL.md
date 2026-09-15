@@ -1,6 +1,6 @@
 ---
 name: delegate-heavy-work
-description: "Decide where work runs before doing it. Use this skill whenever a task involves sweeping several sources or doing web research, grepping or searching across a codebase, running a test/QA/simulator loop more than once, reviewing a diff or branch, or applying a bulk edit across many files — and also whenever you are about to spawn subagents or author a Workflow script, or ultracode is on. It sets the shape (inline, one subagent, or a workflow), the engine (OpenCode, Codex, or Sonnet), what the delegation prompt must carry, and how to verify what comes back. Applies even if the user never says subagent, delegate, OpenCode, Codex, or workflow. Does not apply to single commands or when the user wants to watch the work."
+description: "Decide where work runs before doing it. Use this skill whenever a task involves sweeping several sources or doing web research, exploring a codebase (how a feature works, where something is handled, every caller of a symbol, mapping a module before changing it), grepping or searching across files, running a test/QA/simulator loop more than once, reviewing a diff or branch, or applying a bulk edit across many files — and also whenever you are about to spawn subagents or author a Workflow script, or ultracode is on. It sets the shape (inline, one subagent, or a workflow), the engine (OpenCode, Codex, or Sonnet), what the delegation prompt must carry, and how to verify what comes back. Applies even if the user never says subagent, delegate, OpenCode, Codex, or workflow. Does not apply to single commands or when the user wants to watch the work."
 ---
 
 # Delegate heavy work
@@ -27,6 +27,14 @@ immediately — no routing question, no preflight — even when it falls under a
 **The scope.** Delegate: web research and source sweeps; QA, test and simulator loops;
 grepping and codebase exploration; code review; bulk mechanical edits. This is a guide to the
 shape of qualifying work, not an allowlist — anything else repetitive and wide qualifies too.
+
+**Code exploration is delegated by default.** "How does X work", "where is Y handled", "what
+calls Z", tracing a request across layers, mapping a module before you edit it — once answering
+means opening more than a couple of files, send it to an `Explore` subagent on the cheap tier.
+Ask it the question, not the topic, and have it return a file:line → symbol table capped at a
+size you can read in one pass. Then open the two or three files that matter yourself before
+changing anything; the map tells you where to look, it does not replace looking. Stay inline
+when you already know the file, or when the user is exploring the code with you.
 
 Keep inline, at any size: the approach and architecture decisions; ambiguous debugging where
 the hard part is knowing what to suspect; judging whether the subagent is right; writing the
@@ -277,34 +285,35 @@ itself. Nowhere else.
 a cold start needs, and which slash commands track a long job. Read it before the first
 OpenCode or Codex run of a session; do not reconstruct the flags from memory.
 
-## Every subagent gets a handle
+## Name every subagent after its task and model
 
-Give each spawned agent a **short random handle** — one word, no job description in it: `otter`,
-`finch`, `mako`, `sable`, `wren`, `kite`, `perch`, `lynx`. Draw a fresh one per spawn and never
-reuse one inside a session, including for a retry: a second `otter` makes every earlier line
-about `otter` ambiguous.
+Give each spawned agent a **short kebab-case task name** that says what it is doing, followed by
+the **model it runs on** in square brackets: `review-auth-diff [sonnet]`,
+`sweep-stale-flags [opencode/muse-spark-1.3-contributor-free]`, `verify-findings [opus]`. Verb
+first, then the object, then the model. No random handles, no numbers standing in for a job.
 
 | Where | How |
 |---|---|
-| `Agent` tool | `description: "otter"` |
-| Workflow `agent()` | `label: 'otter'` |
-| Addressing it later | `SendMessage({to: "otter", …})`, `ListAgents` to confirm it is still live |
+| `Agent` tool | `description: "review-auth-diff [sonnet]"` |
+| Workflow `agent()` | `label: 'review-auth-diff [haiku]'` |
+| Addressing it later | copy the name exactly as `ListAgents` prints it into `SendMessage` |
 
-A handle stays unique when two agents are doing the identical job on different slices, which is
-exactly when a descriptive label collides and you can no longer tell which one to re-run or
-stop. It is also short enough to say in a report line without crowding out the finding.
+The name is the map. Anyone scrolling back to a tool call, a status line or a report reads what
+that agent was for, and what it cost, without opening its prompt.
 
-**The handle carries no meaning, so you carry it.** Nothing in `otter` says what otter was for.
-Post the map in your own text the moment you spawn — one line per agent, handle then job:
+**Write the model that actually runs, never `inherit` or `default`.** When `model` is omitted the
+agent runs on the session model, so name that model. For OpenCode use the ID resolved from
+`opencode models`; for Codex, the model the plugin was given. If the engine falls back to Sonnet
+mid-session, the next agent's name says `[sonnet]` — that bracket is how a silent fallback
+becomes visible.
 
-> `otter` — review the auth diff · `finch` — sweep docs for stale flags
+**Two agents on the same job get the slice in the name**, not a counter:
+`review-services-pipeline [sonnet]` and `review-services-contacts [sonnet]`, never
+`review-services-1` and `review-services-2`. A counter tells nobody which files it covered. A
+retry of the same slice keeps the name, adds `-retry`, and updates the bracket if the retry runs
+on a different model.
 
-Do that at spawn time, not at the end. The transcript is the only place that mapping lives, and
-a reader scrolling back to a bare `finch` with no key has to open the tool call to recover it.
-Reuse the same handles when you report, so the two halves line up.
-
-Do not put the handle inside the delegation prompt. The agent has no use for its own name, and a
-name in the prompt invites it to sign findings or refer to itself in the third person.
+Report with the same names, so each finding traces back to the agent and model that produced it.
 
 ## After it runs
 
@@ -337,6 +346,6 @@ answer follow-ups from it. Re-delegating to recover evidence you chose not to ke
 expensive mistake available here.
 
 Then report what was found or changed, not how the delegation went — one line on where it ran
-and on what model. Where more than one agent ran, attribute each finding to the handle that
-produced it, so a follow-up question lands on a specific agent's evidence rather than on the
+and on what model. Where more than one agent ran, attribute each finding to the task name and
+model of the agent that produced it, so a follow-up question lands on a specific agent's evidence rather than on the
 merged pile.
